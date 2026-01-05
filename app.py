@@ -13,17 +13,6 @@ import joblib
 import tempfile
 from pydub import AudioSegment
 
-@st.cache_resource
-def load_model():
-    return tf.keras.models.load_model("models/cnn_best_model.keras")
-
-@st.cache_resource
-def load_label_encoder():
-    return joblib.load("data/label_encoder.pkl")
-
-model = load_model()
-label_encoder = load_label_encoder()
-
 # =================================================
 # PAGE CONFIG
 # =================================================
@@ -32,6 +21,18 @@ st.set_page_config(
     page_icon="🎧",
     layout="wide",
 )
+
+BASE_DIR = os.path.dirname(__file__)
+ENCODER_PATH = os.path.join(BASE_DIR, "data", "label_encoder.pkl")
+MODEL_PATH = os.path.join(BASE_DIR, "models", "crnn_best_model.keras")
+label_encoder = joblib.load(ENCODER_PATH)
+
+@st.cache_resource
+def load_vibe_model():
+    return tf.keras.models.load_model(MODEL_PATH)
+    
+model = load_vibe_model()        
+
 
 def get_base64_image(image_path):
     with open(image_path, "rb") as img_file:
@@ -227,7 +228,7 @@ def interpret_emotion(emotion, confidence):
 # =================================================
 # ANALYSIS
 # =================================================
-if uploaded_file:
+if uploaded_file is not None:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
         audio = AudioSegment.from_file(uploaded_file)
         audio = audio.set_frame_rate(16000).set_channels(1)
@@ -235,93 +236,151 @@ if uploaded_file:
         filepath = tmp.name
 
     with st.spinner("🧠 Running Deep Neural Emotion Analysis..."):
-        emotion, confidence, all_preds = predict_emotion_with_confidence(filepath)
-        y, sr = librosa.load(filepath, sr=16000)
-        duration = librosa.get_duration(y=y, sr=sr)
+        overall_emotion, confidence, all_preds = predict_emotion_with_confidence(filepath)        
+        audio, sr = librosa.load(filepath, sr=16000)
+        duration = librosa.get_duration(y=audio, sr=sr)
 
+    # 1. EMOTION DETECTION (CENTERED)
     st.markdown(f"""
         <div class="prediction-container">
             <p class="emotion-label">This audio sample shows you're feeling</p>
-            <h1 class="emotion-value">{emotion}</h1>
+            <h1 class="emotion-value">{overall_emotion}</h1>
         </div>
     """, unsafe_allow_html=True)
 
-    st.audio(filepath)
-    st.write(f"**Confidence:** {confidence:.2f} ({confidence_label(confidence)})")
-    st.progress(confidence)
+    # 2. AUDIO PREVIEW
+    a_left, a_mid, a_right = st.columns([1, 2, 1])
+    with a_mid:
+        st.audio(filepath)
+        st.markdown(f"""
+            <div style="text-align: center; margin-top: 15px;">
+                <span class="stat-pill">LENGTH: {duration:.2f}s</span>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div style="text-align:center; margin:40px 0 20px 0;">
+        <p style="font-size:1.05rem; color:#475569;">
+            <b>Now, let’s take a closer look at the visual timeline of how emotions unfolded in your voice.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Assuming you got these values from your new predict function
+    emotion, confidence, all_preds = predict_emotion_with_confidence(filepath)
 
-    st.info(interpret_emotion(emotion, confidence))
+    conf_label = confidence_label(confidence)
+    explanation = interpret_emotion(emotion, confidence)
+
+
+    # 1. Display Confidence Score
+    st.write(f"Confidence Score: {confidence:.2f} ({conf_label})")
+    st.progress(confidence / 100) # Streamlit's built-in progress bar
+    
+    st.info(explanation)
+
+    # 2. Calculate Intensity (RMS Energy)
+    y, _ = librosa.load(filepath, sr=16000)
+    rms = np.mean(librosa.feature.rms(y=y))
+    intensity = min(100, rms * 500) # Scaling factor to make it look like a 0-100% bar
+    st.write(f"**Vocal Intensity:** {intensity:.1f}%")
+    st.progress(intensity / 100)
+
+    # 3. Probability Distribution (The "Top 3" Chart)
+    import pandas as pd
+    label_encoder = joblib.load("data/label_encoder.pkl")
 
     chart_data = pd.DataFrame({
-        "Emotion": label_encoder.classes_,
-        "Probability": all_preds
-    }).sort_values("Probability", ascending=False).head(3)
+        'Emotion': label_encoder.classes_,
+        'Probability': all_preds
+    }).sort_values('Probability', ascending=False).head(3)
 
-    st.subheader("Top 3 Probable Emotions")
-    st.bar_chart(chart_data, x="Emotion", y="Probability")
+    st.write("#### Top 3 Probable Emotions")
+    st.bar_chart(chart_data, x='Emotion', y='Probability')
 
-    # ================= EMOTIONAL TIMELINE =================
-    st.subheader("📈 Emotional Timeline")
-    chunk_duration = 1
-    num_chunks = int(np.ceil(duration / chunk_duration))
-    trend = []
+    # 3. ADVANCED VISUALIZATION TABS
+    st.markdown("<br>", unsafe_allow_html=True)
+    tab1, tab2 = st.tabs(["📈 EMOTIONAL TIMELINE", "🔍 EXPLAINABLE AI (XAI)"])
 
-    prog = st.progress(0.0)
-    for i in range(num_chunks):
-        start = int(i * chunk_duration * sr)
-        end = int(min((i + 1) * chunk_duration * sr, len(y)))
-        chunk = y[start:end]
+    with tab1:
+        st.markdown("#### Dynamic Emotional Evolution")
+        st.write("Chunk-by-chunk analysis of emotional transitions.")
+        
+        # Segmented Logic
+        chunk_duration = 1
+        num_chunks = int(np.ceil(duration / chunk_duration))
+        trend = []
+        
+        prog = st.progress(0)
+        for i in range(num_chunks):
+            start = int(i * chunk_duration * sr)
+            end = int(min((i + 1) * chunk_duration * sr, len(audio)))
+            chunk = audio[start:end]
+            chunk_path = f"chunk_{i}.wav"
+            sf.write(chunk_path, chunk, sr)
+            
+            # FIX: Unpack the tuple and only append the emotion string (the first item)
+            emotion_label, _, _ = predict_emotion_with_confidence(chunk_path)
+            trend.append(emotion_label) 
+            
+            os.remove(chunk_path)
+            prog.progress((i + 1) / num_chunks)
+        prog.empty()
 
-        chunk_path = f"chunk_{i}.wav"
-        sf.write(chunk_path, chunk, sr)
+        unique_emotions = list(dict.fromkeys(trend))
+        numeric = [unique_emotions.index(e) for e in trend]
 
-        e, _, _ = predict_emotion_with_confidence(chunk_path)
-        trend.append(e)
+        fig, ax = plt.subplots(figsize=(12, 4))
+        ax.plot(numeric, marker='o', linewidth=4, color='#0f172a', markersize=10, markerfacecolor='#3b82f6')
+        ax.set_yticks(range(len(unique_emotions)))
+        ax.set_yticklabels([e.capitalize() for e in unique_emotions], fontweight='bold', color='#0f172a')
+        ax.set_xlabel("Time (Seconds)", color='#64748b')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.set_facecolor('none')
+        st.pyplot(fig)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        os.remove(chunk_path)
-        prog.progress((i + 1) / num_chunks)
+    with tab2:
+        st.markdown("#### Attention-Map (Gradient-weighted Activation)")
+        st.write("Heatmap identifying the specific spectral regions driving the AI's decision.")
+        
+        mfcc_seq = extract_features(filepath)
+        # Assuming model path is valid
+        model = tf.keras.models.load_model("models/crnn_best_model.keras")
+        input_tensor = tf.Variable(np.expand_dims(mfcc_seq, axis=0), dtype=tf.float32)
 
-    prog.empty()
+        with tf.GradientTape() as tape:
+            preds = model(input_tensor)
+            idx = tf.argmax(preds[0])
+            score = preds[0][idx]
 
-    unique = list(dict.fromkeys(trend))
-    numeric = [unique.index(e) for e in trend]
+        grads = tape.gradient(score, input_tensor)[0]
+        heatmap = tf.reduce_mean(grads, axis=-1).numpy()
 
-    fig, ax = plt.subplots(figsize=(12, 4))
-    ax.plot(numeric, marker="o", linewidth=3)
-    ax.set_yticks(range(len(unique)))
-    ax.set_yticklabels(unique)
-    ax.set_xlabel("Time (Seconds)")
-    st.pyplot(fig)
+        fig2, ax2 = plt.subplots(figsize=(12, 4))
+        librosa.display.specshow(mfcc_seq.T, x_axis="time", ax=ax2, cmap="magma")
+        heatmap_2d = np.tile(heatmap, (mfcc_seq.shape[1], 1))
+        img = ax2.imshow(heatmap_2d, origin="lower", aspect="auto", cmap="jet", alpha=0.35)
+        
+        ax2.set_title("Neural Attention Mapping", color='#0f172a', fontweight='bold')
+        cbar = fig2.colorbar(img, ax=ax2, pad=0.02)
+        cbar.set_label('Attention Intensity', color="#0f172a")
+        st.pyplot(fig2)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # ================= XAI =================
-    st.subheader("🔍 Explainable AI (XAI)")
-    mfcc_seq = extract_features(filepath)
-    input_tensor = tf.Variable(np.expand_dims(mfcc_seq, axis=0), dtype=tf.float32)
-
-    with tf.GradientTape() as tape:
-        preds = model(input_tensor)
-        idx = tf.argmax(preds[0])
-        score = preds[0][idx]
-
-    grads = tape.gradient(score, input_tensor)[0]
-    heatmap = tf.reduce_mean(grads, axis=-1).numpy()
-
-    fig2, ax2 = plt.subplots(figsize=(12, 4))
-    librosa.display.specshow(mfcc_seq.T, x_axis="time", ax=ax2, cmap="magma")
-    ax2.imshow(np.tile(heatmap, (mfcc_seq.shape[1], 1)), alpha=0.35, aspect="auto")
-    st.pyplot(fig2)
-
-    os.remove(filepath)
+    if os.path.exists(filepath):
+        os.remove(filepath)
 
 else:
     st.markdown("""
-        <div style="text-align: center; padding: 100px; color: #94a3b8;">
+        <div style="text-align: center; padding: 100px; color: #94a3b8 !important; letter-spacing: 2px;">
             SYSTEM AWAITING UPLINK...
         </div>
     """, unsafe_allow_html=True)
 
 st.markdown("""
-<div style="text-align:center; padding:40px; opacity:0.5;">
-    VibeCheck.AI // 2025
-</div>
+    <div style="text-align: center; padding: 60px 0; font-size: 0.8rem; letter-spacing: 2px; opacity: 0.5;">
+        VibeCheck.AI // SPEECH EMOTION // 2025
+    </div>
 """, unsafe_allow_html=True)
