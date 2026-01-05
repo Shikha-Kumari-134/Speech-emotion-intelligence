@@ -7,7 +7,7 @@ import librosa.display
 import tensorflow as tf
 import soundfile as sf
 import base64
-from predict import predict_emotion_with_confidence, extract_features, convert_to_wav
+from src.predict import predict_emotion_with_confidence, extract_features
 import joblib
 import pandas as pd
 import tempfile
