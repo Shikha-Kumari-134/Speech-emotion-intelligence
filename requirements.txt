@@ -6,5 +6,4 @@ matplotlib
 tensorflow
 joblib
 scikit-learn
-pydub
 pandas

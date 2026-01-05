@@ -11,7 +11,6 @@ import base64
 from src.predict import predict_emotion_with_confidence, extract_features
 import joblib
 import tempfile
-from pydub import AudioSegment
 
 # =================================================
 # PAGE CONFIG
@@ -230,9 +229,7 @@ def interpret_emotion(emotion, confidence):
 # =================================================
 if uploaded_file is not None:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-        audio = AudioSegment.from_file(uploaded_file)
-        audio = audio.set_frame_rate(16000).set_channels(1)
-        audio.export(tmp.name, format="wav")
+        tmp.write(uploaded_file.read())
         filepath = tmp.name
 
     with st.spinner("🧠 Running Deep Neural Emotion Analysis..."):
