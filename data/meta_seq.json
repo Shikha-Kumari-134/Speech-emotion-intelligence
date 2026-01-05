@@ -1,0 +1,15 @@
+{
+  "n_mfcc": 40,
+  "max_len": 142,
+  "emotion_classes": [
+    "angry",
+    "calm",
+    "disgust",
+    "fear",
+    "happy",
+    "neutral",
+    "ps",
+    "sad",
+    "surprised"
+  ]
+}
