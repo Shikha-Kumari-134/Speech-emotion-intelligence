@@ -279,7 +279,7 @@ def interpret_emotion(emotion, confidence):
 # =================================================
 if uploaded_file is not None:
     # 1. Safe temp paths
-    processed_path = "/tmp/processed_audio.wav"
+    processed_path = "temp.wav"
     
     # 2. Save uploaded file
     suffix = os.path.splitext(uploaded_file.name)[1]
